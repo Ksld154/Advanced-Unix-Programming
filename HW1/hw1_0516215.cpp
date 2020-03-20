@@ -5,7 +5,10 @@
 #include <dirent.h>
 #include <regex.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <iostream>
+#include <string>
 #include <vector>
 using namespace std;
 
@@ -18,12 +21,6 @@ struct connInfo {
     string remoteAddr;
     string inode;
 };
-
-// struct procInfo {
-//     const char* pid;
-//     const char* procName;
-//     const char* inode; 
-// };
 
 struct procInfo {
     string pid;
@@ -59,7 +56,6 @@ struct connInfo parseConnEntry(char *line, int connType){
     }
 
     printf("%s %s %s\n", conn.localAddr.c_str(), conn.remoteAddr.c_str(), conn.inode.c_str());
-    // connList.push_back(conn);
     return conn;
 }
 
@@ -168,7 +164,6 @@ int scanProcess(){
                     // exit(EXIT_FAILURE);
                 }
 
-                
                 string fdEntry(buf);
                 struct procInfo inodeEntry;
 
@@ -178,15 +173,9 @@ int scanProcess(){
                     string sub1 = fdEntry.substr(0, fdEntry.find("]", 0));
                     string inode = sub1.substr(fdEntry.find("[", 0)+1);
 
-                    // inodeEntry.inode = inode.c_str();
-                    // inodeEntry.pid = pidFolders[i].c_str();
-                    // string procName = parseProcName(inodeEntry);
-                    // inodeEntry.procName = procName.c_str();
-
                     inodeEntry.inode = inode;
                     inodeEntry.pid = pidFolders[i];
                     inodeEntry.procName = parseProcName(inodeEntry);
-
 
                     // printf("%s %s %s\n", inodeEntry.pid.c_str(), inodeEntry.inode.c_str(), inodeEntry.procName.c_str());
                     inodeList.push_back(inodeEntry);
@@ -198,13 +187,89 @@ int scanProcess(){
     return 0;
 }
 
+string ipConvert(string ipAddrWithPort, int connType){
+    
+    string ipAddr = ipAddrWithPort.substr(0, ipAddrWithPort.find(":", 0));
+    string port = ipAddrWithPort.substr(ipAddrWithPort.find(":", 0));
+    string readableIP;
+
+    int portInt;
+    sscanf(port.c_str(), ":%d", &portInt);
+    
+    if(connType == 0 || connType == 2){ // ipv4
+        
+        char dstIP[INET_ADDRSTRLEN];
+        struct in_addr addr;
+
+        sscanf(ipAddr.c_str(), "%X", &addr.s_addr);
+
+        if( inet_ntop(AF_INET, &addr, dstIP, INET_ADDRSTRLEN) == NULL ) {
+            printf("IP convert failed!\n");
+            return "";
+        }
+        port = ":" + to_string(portInt);
+        readableIP = dstIP + port;
+    } 
+    
+    // ipv6
+    else if(connType == 1 || connType == 3) { 
+
+        char dstIP[INET6_ADDRSTRLEN];
+        struct in6_addr addr;
+        
+        sscanf(ipAddr.c_str(), "%08X%08X%08X%08X", &addr.__in6_u.__u6_addr32[0], &addr.__in6_u.__u6_addr32[1], \
+        &addr.__in6_u.__u6_addr32[2], &addr.__in6_u.__u6_addr32[3]);
+        
+        if( inet_ntop(AF_INET6, &addr, dstIP, INET6_ADDRSTRLEN) == NULL){
+            printf("IP convert failed!\n");
+            return "";
+        }
+        port = ":" + to_string(portInt);
+        readableIP = dstIP + port;
+    }
+
+    // cout << readableIP << endl;
+    return readableIP;
+}
+
 void outputResult(){
+
+    for(size_t i = 0; i < connList.size(); i++){
+        connList[i].localAddr  = ipConvert(connList[i].localAddr, connList[i].connType);
+        connList[i].remoteAddr = ipConvert(connList[i].remoteAddr, connList[i].connType); 
+    }
+
+    //TODO: struct sort by connType!!! =. SKIP
+
+
+    bool udpStartFlag = false;
+
+
+    printf("\nList of TCP connections: \n");
+    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "pid/Program names and arguments");
 
     for(size_t i = 0; i < connList.size(); i++){
         for(size_t j = 0; j < inodeList.size(); j++){
             
+            if(connList[i].connType >= 2 && !udpStartFlag){
+                udpStartFlag = true;
+                printf("\nList of UDP connections: \n");
+                printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "pid/Program names and arguments");
+            }
+
             if (connList[i].inode == inodeList[j].inode){
-                printf("%d %s %s %s %s\n", connList[i].connType, connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                
+                string transProto;
+                if(connList[i].connType == 0)
+                    transProto = "tcp";
+                else if (connList[i].connType == 1)
+                    transProto = "tcp6";
+                else if (connList[i].connType == 2)
+                    transProto = "udp";
+                else if (connList[i].connType == 3)
+                    transProto = "udp6";
+
+                printf("%-5s %-40s %-40s %s %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
             }
         }
     }
@@ -226,7 +291,6 @@ string parseProcName(struct procInfo inodeEntry){
     }
 
     while(getline(&line, &n, fd) != -1){
-        
         procName = line;
     }
 
@@ -237,17 +301,14 @@ string parseProcName(struct procInfo inodeEntry){
 int main(){
 
     readConnection("tcp", NET_FILE);
+    readConnection("tcp6", NET_FILE);
+    readConnection("udp", NET_FILE);
+    readConnection("udp6", NET_FILE);
+
 
     scanProcess();
 
     outputResult();
-    // cout << inodeList.size() << endl;
-    // for (size_t i = 0; i < inodeList.size(); i++){
-    //     printf("%s %s %s\n", inodeList[i].pid.c_str(), inodeList[i].inode.c_str(), inodeList[i].procName.c_str());
-
-    //     // printf("%s %s\n", inodeList[i].pid, inodeList[i].inode);
-    // }
 
     return 0;
-
 }
