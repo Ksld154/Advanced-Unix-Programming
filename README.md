@@ -1,2 +1,5 @@
 # Advanced-Unix-Programming
-Advanced Unix Programming @NCTU, 2020 Fall
+
+Course: Advanced Unix Programming
+
+Semester: 2020 Spring
