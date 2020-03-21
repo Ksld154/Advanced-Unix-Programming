@@ -11,6 +11,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <algorithm>
 using namespace std;
 
 const string NET_FILE = "/proc/net/";
@@ -297,7 +298,7 @@ void outputResult(struct optResult opt_res){
                             printf("\nList of UDP connections: \n");
                             printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
                         }
-                        printf("%-5s %-40s %-40s %s %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                        printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                     }
 
                 }
@@ -313,7 +314,7 @@ void outputResult(struct optResult opt_res){
                         printf("\nList of UDP connections: \n");
                         printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
                     }
-                    printf("%-5s %-40s %-40s %s %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                    printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                 }
             }
         }
@@ -321,26 +322,53 @@ void outputResult(struct optResult opt_res){
 }
 
 string parseProcName(struct procInfo inodeEntry){
-    string cmdFile = "/proc/" + string(inodeEntry.pid) + "/cmdline";
+    string commFile = "/proc/" + string(inodeEntry.pid) + "/comm";
+    string cmdFile  = "/proc/" + string(inodeEntry.pid) + "/cmdline";
     string procName;
+    string procArg;
 
     FILE*   fd;
     char    *line = NULL;
     size_t  n = 0; 
     
+    // Get Process Name
+    fd = fopen(commFile.c_str(), "r");
+    if (fd == NULL){
+        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
+        return "";
+    }
+    while(getline(&line, &n, fd) != -1){
+        procName = line;
+    }
+    fclose(fd);
+
+    // remove trailing '\n'
+    if(procName.length() > 0){
+        procName.pop_back(); 
+    }
+
+    // Get process arguments
     fd = fopen(cmdFile.c_str(), "r");
     if (fd == NULL){
         printf("[ERROR] failed to open %s\n", cmdFile.c_str());
         return "";
-        // exit(EXIT_FAILURE);
     }
-
     while(getline(&line, &n, fd) != -1){
-        procName = line;
+        procArg = line;
+    }
+    fclose(fd);
+
+    // change separater of each arg from '\0' to ' '(space),
+    // and discard first arg
+    std::replace(procArg.begin(), procArg.end(), '\0', ' ');
+    if (procArg.find(" ") == string::npos){
+        procArg = "";
+    }
+    else {
+        procArg = procArg.substr(procArg.find(" ", 0)+1);
     }
 
-    fclose(fd);
-    return procName;
+    return procName + " " + procArg;
 }
 
 struct optResult handleOptions(int argc, char *argv[]){
@@ -357,11 +385,9 @@ struct optResult handleOptions(int argc, char *argv[]){
     while( (c = getopt_long(argc, argv, optFormat, opts, NULL)) != -1) {
         switch (c) {
             case 't':
-                printf("TCP\n");
                 opt_res.tcp_flag = 1;
                 break;
             case 'u':
-                printf("UDP\n");
                 opt_res.udp_flag = 1;
                 break;
             default:
