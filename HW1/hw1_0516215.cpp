@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <getopt.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -31,7 +32,7 @@ struct procInfo {
 vector <struct connInfo> connList;
 vector <struct procInfo> inodeList;
 
-// struct ConnInfo parseConnEntry(char *, int);
+int handleOptions(int, char**);
 string parseProcName(struct procInfo);
 
 struct connInfo parseConnEntry(char *line, int connType){
@@ -55,11 +56,11 @@ struct connInfo parseConnEntry(char *line, int connType){
         idx++;
     }
 
-    printf("%s %s %s\n", conn.localAddr.c_str(), conn.remoteAddr.c_str(), conn.inode.c_str());
+    // printf("%s %s %s\n", conn.localAddr.c_str(), conn.remoteAddr.c_str(), conn.inode.c_str());
     return conn;
 }
 
-int readConnection(string connType, const string NET_FILE){
+int scanConnection(string connType, const string NET_FILE){
 
     int conn = -1;
     if(connType == "tcp"){
@@ -76,7 +77,7 @@ int readConnection(string connType, const string NET_FILE){
     }
 
     const string connPath = NET_FILE + connType;
-    printf("%s\n", connPath.c_str());
+    // printf("%s\n", connPath.c_str());
 
     FILE    *fp;
     char    *line = NULL;
@@ -232,7 +233,7 @@ string ipConvert(string ipAddrWithPort, int connType){
     return readableIP;
 }
 
-void outputResult(){
+void outputResult(int option_res){
 
     for(size_t i = 0; i < connList.size(); i++){
         connList[i].localAddr  = ipConvert(connList[i].localAddr, connList[i].connType);
@@ -244,9 +245,10 @@ void outputResult(){
 
     bool udpStartFlag = false;
 
-
-    printf("\nList of TCP connections: \n");
-    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "pid/Program names and arguments");
+    if(option_res != 2){
+        printf("\nList of TCP connections: \n");
+        printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "pid/Program names and arguments");
+    }
 
     for(size_t i = 0; i < connList.size(); i++){
         for(size_t j = 0; j < inodeList.size(); j++){
@@ -298,17 +300,70 @@ string parseProcName(struct procInfo inodeEntry){
     return procName;
 }
 
-int main(){
+int handleOptions(int argc, char *argv[]){
 
-    readConnection("tcp", NET_FILE);
-    readConnection("tcp6", NET_FILE);
-    readConnection("udp", NET_FILE);
-    readConnection("udp6", NET_FILE);
+    // printf("argc: %d\n", argc);
+    // for(int i = 0; i < argc; i++){
+    //     printf("%s\n", argv[i]);
+    // }
 
+    const char *optFormat = "tu";
+    int c;
+
+    struct option opts[] = {
+        {"tcp", 0, NULL, 'v'},
+        {"udp", 0, NULL, 'n'}
+    };
+
+    int tcp_flag = 0;
+    int udp_flag = 0;
+
+    while( (c = getopt_long(argc, argv, optFormat, opts, NULL)) != -1) {
+        switch (c) {
+            case 't':
+                printf("TCP\n");
+                tcp_flag = 1;
+                break;
+            case 'u':
+                printf("UDP\n");
+                udp_flag = 1;
+                break;
+            default:
+                printf("default case\n");
+        }
+    }
+
+    int case_flag = 0;
+    if(tcp_flag && udp_flag)
+        case_flag = 3;
+    else if(udp_flag && !tcp_flag)
+        case_flag = 2;
+    else if(tcp_flag && !udp_flag)
+        case_flag = 1;
+
+    return case_flag;
+}
+
+int main(int argc, char *argv[]){
+
+    int option_res = handleOptions(argc, argv);
+
+    if(option_res == 0 || option_res == 3){
+        scanConnection("tcp", NET_FILE);
+        scanConnection("tcp6", NET_FILE);
+        scanConnection("udp", NET_FILE);
+        scanConnection("udp6", NET_FILE);
+    } else if(option_res == 2){
+        scanConnection("udp", NET_FILE);
+        scanConnection("udp6", NET_FILE);
+    } else if(option_res == 1){
+        scanConnection("tcp", NET_FILE);
+        scanConnection("tcp6", NET_FILE);
+    }
 
     scanProcess();
 
-    outputResult();
+    outputResult(option_res);
 
     return 0;
 }
