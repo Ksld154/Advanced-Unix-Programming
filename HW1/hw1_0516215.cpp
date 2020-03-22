@@ -16,7 +16,6 @@ using namespace std;
 
 const string NET_FILE = "/proc/net/";
 
-
 struct connInfo {
     int connType;
     string localAddr;
@@ -40,8 +39,14 @@ struct optResult {
 vector <struct connInfo> connList;
 vector <struct procInfo> inodeList;
 
-struct optResult handleOptions(int, char**);
+struct connInfo parseConnEntry(char *line, int connType);
+string ipConvert(string ipAddrWithPort, int connType);
 string parseProcName(struct procInfo);
+struct optResult handleOptions(int, char**);
+int  scanConnection(string connType);
+int  scanProcess(uid_t uid);
+void outputResult(struct optResult opt_res);
+void outputResultWithoutProc(struct optResult opt_res);
 
 struct connInfo parseConnEntry(char *line, int connType){
 
@@ -68,7 +73,135 @@ struct connInfo parseConnEntry(char *line, int connType){
     return conn;
 }
 
-int scanConnection(string connType, const string NET_FILE){
+string ipConvert(string ipAddrWithPort, int connType){
+    
+    string ipAddr = ipAddrWithPort.substr(0, ipAddrWithPort.find(":", 0));
+    string port = ipAddrWithPort.substr(ipAddrWithPort.find(":", 0));
+    string readableIP;
+
+    int portInt;
+    sscanf(port.c_str(), ":%d", &portInt);
+    
+    if(connType == 0 || connType == 2){ // ipv4
+        
+        char dstIP[INET_ADDRSTRLEN];
+        struct in_addr addr;
+
+        sscanf(ipAddr.c_str(), "%X", &addr.s_addr);
+
+        if( inet_ntop(AF_INET, &addr, dstIP, INET_ADDRSTRLEN) == NULL ) {
+            printf("IP convert failed!\n");
+            return "";
+        }
+        port = ":" + to_string(portInt);
+        readableIP = dstIP + port;
+    } 
+    
+    // ipv6
+    else if(connType == 1 || connType == 3) { 
+
+        char dstIP[INET6_ADDRSTRLEN];
+        struct in6_addr addr;
+        
+        sscanf(ipAddr.c_str(), "%08X%08X%08X%08X", &addr.__in6_u.__u6_addr32[0], &addr.__in6_u.__u6_addr32[1], \
+        &addr.__in6_u.__u6_addr32[2], &addr.__in6_u.__u6_addr32[3]);
+        
+        if( inet_ntop(AF_INET6, &addr, dstIP, INET6_ADDRSTRLEN) == NULL){
+            printf("IP convert failed!\n");
+            return "";
+        }
+        port = ":" + to_string(portInt);
+        readableIP = dstIP + port;
+    }
+
+    // cout << readableIP << endl;
+    return readableIP;
+}
+
+string parseProcName(struct procInfo inodeEntry){
+    string commFile = "/proc/" + string(inodeEntry.pid) + "/comm";
+    string cmdFile  = "/proc/" + string(inodeEntry.pid) + "/cmdline";
+    string procName;
+    string procArg;
+
+    FILE*   fd;
+    char    *line = NULL;
+    size_t  n = 0; 
+    
+    // Get Process Name
+    fd = fopen(commFile.c_str(), "r");
+    if (fd == NULL){
+        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
+        return "";
+    }
+    while(getline(&line, &n, fd) != -1){
+        procName = line;
+    }
+    fclose(fd);
+
+    // remove trailing '\n'
+    if(procName.length() > 0){
+        procName.pop_back(); 
+    }
+
+    // Get process arguments
+    fd = fopen(cmdFile.c_str(), "r");
+    if (fd == NULL){
+        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
+        return "";
+    }
+    while(getline(&line, &n, fd) != -1){
+        procArg = line;
+    }
+    fclose(fd);
+
+    // change separater of each arg from '\0' to ' '(space),
+    // and discard first arg
+    std::replace(procArg.begin(), procArg.end(), '\0', ' ');
+    if (procArg.find(" ") == string::npos){
+        procArg = "";
+    }
+    else {
+        procArg = procArg.substr(procArg.find(" ", 0)+1);
+    }
+
+    return procName + " " + procArg;
+}
+
+
+struct optResult handleOptions(int argc, char *argv[]){
+
+    struct optResult opt_res{0, 0, 0, ""};
+
+    int c;
+    const char *optFormat = "tu";
+    struct option opts[] = {
+        {"tcp", 0, NULL, 'v'},
+        {"udp", 0, NULL, 'n'}
+    };
+
+    while( (c = getopt_long(argc, argv, optFormat, opts, NULL)) != -1) {
+        switch (c) {
+            case 't':
+                opt_res.tcp_flag = 1;
+                break;
+            case 'u':
+                opt_res.udp_flag = 1;
+                break;
+            default:
+                printf("Not Valid option! Will ignore it.\n");
+        }
+    }
+
+    if(optind != argc){
+        opt_res.filter_flag = 1;
+        opt_res.filter_str = argv[optind];
+    }
+
+    return opt_res;
+}
+
+int scanConnection(string connType){
 
     int conn = -1;
     if(connType == "tcp"){
@@ -108,7 +241,7 @@ int scanConnection(string connType, const string NET_FILE){
     return 0;
 }
 
-int scanProcess(){
+int scanProcess(uid_t uid){
 
     regex_t regex;
     int regexRes = regcomp(&regex, "^[0-9]+$", REG_EXTENDED);
@@ -145,6 +278,11 @@ int scanProcess(){
         }
     }
     closedir(dir_ptr);
+
+    // non-root user cannot open fd folders
+    if(uid != 0){
+        return 1;
+    }
 
     // scan fd folder inside every pidFolders
     for (size_t i = 0; i < pidFolders.size(); i++){
@@ -194,51 +332,6 @@ int scanProcess(){
         closedir(dir_ptr);
     }
     return 0;
-}
-
-string ipConvert(string ipAddrWithPort, int connType){
-    
-    string ipAddr = ipAddrWithPort.substr(0, ipAddrWithPort.find(":", 0));
-    string port = ipAddrWithPort.substr(ipAddrWithPort.find(":", 0));
-    string readableIP;
-
-    int portInt;
-    sscanf(port.c_str(), ":%d", &portInt);
-    
-    if(connType == 0 || connType == 2){ // ipv4
-        
-        char dstIP[INET_ADDRSTRLEN];
-        struct in_addr addr;
-
-        sscanf(ipAddr.c_str(), "%X", &addr.s_addr);
-
-        if( inet_ntop(AF_INET, &addr, dstIP, INET_ADDRSTRLEN) == NULL ) {
-            printf("IP convert failed!\n");
-            return "";
-        }
-        port = ":" + to_string(portInt);
-        readableIP = dstIP + port;
-    } 
-    
-    // ipv6
-    else if(connType == 1 || connType == 3) { 
-
-        char dstIP[INET6_ADDRSTRLEN];
-        struct in6_addr addr;
-        
-        sscanf(ipAddr.c_str(), "%08X%08X%08X%08X", &addr.__in6_u.__u6_addr32[0], &addr.__in6_u.__u6_addr32[1], \
-        &addr.__in6_u.__u6_addr32[2], &addr.__in6_u.__u6_addr32[3]);
-        
-        if( inet_ntop(AF_INET6, &addr, dstIP, INET6_ADDRSTRLEN) == NULL){
-            printf("IP convert failed!\n");
-            return "";
-        }
-        port = ":" + to_string(portInt);
-        readableIP = dstIP + port;
-    }
-
-    // cout << readableIP << endl;
-    return readableIP;
 }
 
 void outputResult(struct optResult opt_res){
@@ -321,111 +414,92 @@ void outputResult(struct optResult opt_res){
     }
 }
 
-string parseProcName(struct procInfo inodeEntry){
-    string commFile = "/proc/" + string(inodeEntry.pid) + "/comm";
-    string cmdFile  = "/proc/" + string(inodeEntry.pid) + "/cmdline";
-    string procName;
-    string procArg;
-
-    FILE*   fd;
-    char    *line = NULL;
-    size_t  n = 0; 
-    
-    // Get Process Name
-    fd = fopen(commFile.c_str(), "r");
-    if (fd == NULL){
-        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
-        return "";
-    }
-    while(getline(&line, &n, fd) != -1){
-        procName = line;
-    }
-    fclose(fd);
-
-    // remove trailing '\n'
-    if(procName.length() > 0){
-        procName.pop_back(); 
+void outputResultWithoutProc(struct optResult opt_res){
+    for(size_t i = 0; i < connList.size(); i++){
+        connList[i].localAddr  = ipConvert(connList[i].localAddr, connList[i].connType);
+        connList[i].remoteAddr = ipConvert(connList[i].remoteAddr, connList[i].connType); 
     }
 
-    // Get process arguments
-    fd = fopen(cmdFile.c_str(), "r");
-    if (fd == NULL){
-        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
-        return "";
-    }
-    while(getline(&line, &n, fd) != -1){
-        procArg = line;
-    }
-    fclose(fd);
+    bool tcpTitleFlag = false;
+    bool udpTitleFlag = false;
 
-    // change separater of each arg from '\0' to ' '(space),
-    // and discard first arg
-    std::replace(procArg.begin(), procArg.end(), '\0', ' ');
-    if (procArg.find(" ") == string::npos){
-        procArg = "";
-    }
-    else {
-        procArg = procArg.substr(procArg.find(" ", 0)+1);
-    }
+    for(size_t i = 0; i < connList.size(); i++){
 
-    return procName + " " + procArg;
-}
+        string transProto;
+        if(connList[i].connType == 0)
+            transProto = "tcp";
+        else if (connList[i].connType == 1)
+            transProto = "tcp6";
+        else if (connList[i].connType == 2)
+            transProto = "udp";
+        else if (connList[i].connType == 3)
+            transProto = "udp6";
 
-struct optResult handleOptions(int argc, char *argv[]){
+        // check if any fields contains the filter_str
+        if(opt_res.filter_flag){
+            if(transProto.find(opt_res.filter_str) != string::npos ||
+                connList[i].localAddr.find(opt_res.filter_str) != string::npos ||
+                connList[i].remoteAddr.find(opt_res.filter_str) != string::npos
+            ) {
+                if(connList[i].connType < 2 && !tcpTitleFlag){
+                    tcpTitleFlag = true;
+                    printf("\nList of TCP connections: \n");
+                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+                }
 
-    struct optResult opt_res{0, 0, 0, ""};
+                if(connList[i].connType >= 2 && !udpTitleFlag){
+                    udpTitleFlag = true;
+                    printf("\nList of UDP connections: \n");
+                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+                }
+                printf("%-5s %-40s %-40s -\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str());
+            }
+        }
+        else {
+            if(connList[i].connType < 2 && !tcpTitleFlag){
+                tcpTitleFlag = true;
+                printf("\nList of TCP connections: \n");
+                printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+            }
 
-    int c;
-    const char *optFormat = "tu";
-    struct option opts[] = {
-        {"tcp", 0, NULL, 'v'},
-        {"udp", 0, NULL, 'n'}
-    };
-
-    while( (c = getopt_long(argc, argv, optFormat, opts, NULL)) != -1) {
-        switch (c) {
-            case 't':
-                opt_res.tcp_flag = 1;
-                break;
-            case 'u':
-                opt_res.udp_flag = 1;
-                break;
-            default:
-                printf("Not Valid option! Will ignore it.\n");
+            if(connList[i].connType >= 2 && !udpTitleFlag){
+                udpTitleFlag = true;
+                printf("\nList of UDP connections: \n");
+                printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+            }
+            printf("%-5s %-40s %-40s -\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str());
         }
     }
-
-    if(optind != argc){
-        opt_res.filter_flag = 1;
-        opt_res.filter_str = argv[optind];
-    }
-
-    return opt_res;
 }
+
 
 int main(int argc, char *argv[]){
 
+    uid_t uid = geteuid();
+    
     struct optResult opt_res = handleOptions(argc, argv);
 
     if(opt_res.tcp_flag){
-        scanConnection("tcp", NET_FILE);
-        scanConnection("tcp6", NET_FILE); 
+        scanConnection("tcp");
+        scanConnection("tcp6"); 
     }
     if(opt_res.udp_flag){
-        scanConnection("udp", NET_FILE);
-        scanConnection("udp6", NET_FILE);
+        scanConnection("udp");
+        scanConnection("udp6");
     }
     if(!opt_res.tcp_flag && !opt_res.udp_flag){
-        scanConnection("tcp", NET_FILE);
-        scanConnection("tcp6", NET_FILE);
-        scanConnection("udp", NET_FILE);
-        scanConnection("udp6", NET_FILE);
+        scanConnection("tcp");
+        scanConnection("tcp6");
+        scanConnection("udp");
+        scanConnection("udp6");
     } 
     
+    scanProcess(uid);
 
-    scanProcess();
-
-    outputResult(opt_res);
+    if (uid == 0)
+        outputResult(opt_res);
+    else 
+        outputResultWithoutProc(opt_res);
 
     return 0;
 }
