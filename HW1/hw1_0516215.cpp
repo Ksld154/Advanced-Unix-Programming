@@ -19,6 +19,7 @@ const string NET_FILE = "/proc/net/";
 
 struct connInfo {
     int connType;
+    string connStr;
     string localAddr;
     string remoteAddr;
     string inode;
@@ -44,16 +45,17 @@ vector <struct procInfo> inodeList;
 struct connInfo parseConnEntry(char *line, int connType);
 string ipConvert(string ipAddrWithPort, int connType);
 string parseProcName(struct procInfo);
+
 struct optResult handleOptions(int, char**);
 int  scanConnection(string connType);
 int  scanProcess(uid_t uid);
 void outputResult(struct optResult opt_res);
-void outputResultWithoutProc(struct optResult opt_res);
 
-struct connInfo parseConnEntry(char *line, int connType){
+struct connInfo parseConnEntry(char *line, int connType, string connStr){
 
     struct connInfo conn;
     conn.connType = connType;
+    conn.connStr = connStr;
 
     int idx = 0;
     char* substr = strtok(line, " ");
@@ -81,42 +83,42 @@ string ipConvert(string ipAddrWithPort, int connType){
     string port = ipAddrWithPort.substr(ipAddrWithPort.find(":", 0));
     string readableIP;
 
+    // sscanf: convert string port(hex format) to int port
+    // to_string: convert int to string, using decimal format
     int portInt;
-    sscanf(port.c_str(), ":%d", &portInt);
-    
-    if(connType == 0 || connType == 2){ // ipv4
-        
-        char dstIP[INET_ADDRSTRLEN];
-        struct in_addr addr;
+    sscanf(port.c_str(), ":%X", &portInt);
+    port = ":" + to_string(portInt);
 
+    // ipv4
+    char ipBuf[INET6_ADDRSTRLEN];
+    if(connType == 0 || connType == 2){ 
+        
+        // convert string ip addr(hex) to int ip addr
+        struct in_addr addr;
         sscanf(ipAddr.c_str(), "%X", &addr.s_addr);
 
-        if( inet_ntop(AF_INET, &addr, dstIP, INET_ADDRSTRLEN) == NULL ) {
+        // convert int ip addr to human-readable format
+        if( inet_ntop(AF_INET, &addr, ipBuf, INET_ADDRSTRLEN) == NULL ) {
             printf("IP convert failed!\n");
             return "";
         }
-        port = ":" + to_string(portInt);
-        readableIP = dstIP + port;
+
     } 
     
     // ipv6
     else if(connType == 1 || connType == 3) { 
 
-        char dstIP[INET6_ADDRSTRLEN];
         struct in6_addr addr;
-        
         sscanf(ipAddr.c_str(), "%08X%08X%08X%08X", &addr.__in6_u.__u6_addr32[0], &addr.__in6_u.__u6_addr32[1], \
         &addr.__in6_u.__u6_addr32[2], &addr.__in6_u.__u6_addr32[3]);
         
-        if( inet_ntop(AF_INET6, &addr, dstIP, INET6_ADDRSTRLEN) == NULL){
+        if( inet_ntop(AF_INET6, &addr, ipBuf, INET6_ADDRSTRLEN) == NULL){
             printf("IP convert failed!\n");
             return "";
         }
-        port = ":" + to_string(portInt);
-        readableIP = dstIP + port;
     }
 
-    // cout << readableIP << endl;
+    readableIP = ipBuf + port;
     return readableIP;
 }
 
@@ -196,13 +198,14 @@ struct optResult handleOptions(int argc, char *argv[]){
         }
     }
 
+    // We got a filter rule
     if(optind != argc){
-        // opt_res.filter_str = argv[optind];
 
         regex_t regex;
         int regexRes = regcomp(&regex, argv[optind], REG_EXTENDED);
         if(regexRes) {
-            fprintf(stderr, "Could not compile regex\n");
+            fprintf(stdout, "Could not compile regex\n");
+            exit(EXIT_FAILURE);
             return opt_res;
         }
 
@@ -228,23 +231,26 @@ int scanConnection(string connType){
     else if(connType == "udp6"){
         conn = 3;
     }
-
-    const string connPath = NET_FILE + connType;
-    // printf("%s\n", connPath.c_str());
+    
 
     FILE    *fp;
     char    *line = NULL;
-    size_t  n = 0; 
+    size_t  n = 0;
+
+    // Open /proc/net/{tcp, tcp6, udp, udp6}, to get connection infos
+    const string connPath = NET_FILE + connType;
     fp = fopen(connPath.c_str(), "r");
     if (fp == NULL){
-        exit(EXIT_FAILURE);
+        printf("Fail to open connection file %s\n", connPath.c_str());
+        return -1;
     }
 
+    // build connList table
     int idx = 0;
     while(getline(&line, &n, fp) != -1){
         struct connInfo connEntry;
         if (idx >= 1){
-            connEntry = parseConnEntry(line, conn);
+            connEntry = parseConnEntry(line, conn, connType);
             connList.push_back(connEntry);
         }
         idx++;
@@ -255,6 +261,7 @@ int scanConnection(string connType){
 
 int scanProcess(uid_t uid){
 
+    // regexp for PID folder
     regex_t regex;
     int regexRes = regcomp(&regex, "^[0-9]+$", REG_EXTENDED);
     if(regexRes) {
@@ -265,11 +272,10 @@ int scanProcess(uid_t uid){
     if(dir_ptr == NULL){
         printf("Fail to open /proc\n");
     }
-
-    struct dirent *dirent_ptr; readdir(dir_ptr);  
-    int dfd = dirfd(dir_ptr);
     
     // scan for pidFolders
+    struct dirent *dirent_ptr; readdir(dir_ptr);  
+    int dfd = dirfd(dir_ptr);
     vector <string> pidFolders;
     while( (dirent_ptr = readdir(dir_ptr))  != NULL){
 
@@ -278,9 +284,8 @@ int scanProcess(uid_t uid){
             printf("fstatat call error!\n");
         }
 
-        // it is a folder
+        // it is a folder && folder name is PID 
         else if(S_ISDIR(statbuf.st_mode)) {
-            
             int regResult = regexec(&regex, dirent_ptr->d_name, 0, NULL, 0);
             if(!regResult){
                 pidFolders.push_back(dirent_ptr->d_name);
@@ -289,26 +294,21 @@ int scanProcess(uid_t uid){
     }
     closedir(dir_ptr);
 
-    // non-root user cannot open fd folders
-    if(uid != 0){
-        return 1;
-    }
-
-    // scan fd folder inside every pidFolders
+    // scan for "fd folder" inside pidFolders
     for (size_t i = 0; i < pidFolders.size(); i++){
 
         string fdPath = "/proc/" + pidFolders[i] + "/fd"; 
-        // printf("\n%s\n", fdPath.c_str());
         
+        // a non-root user may not open fd folders that belong to other users
         DIR *dir_ptr = opendir(fdPath.c_str());
         if(dir_ptr == NULL){
-            printf("Fail to open %s\n", fdPath.c_str());
-            // exit(EXIT_FAILURE);
+            continue;
         }
 
+        // Scan for every "symbolic link" inside /proc/${PID}/fd
         struct dirent *dirent_ptr;
         while( (dirent_ptr = readdir(dir_ptr)) != NULL) {
-
+            
             if( (strcmp("..", dirent_ptr->d_name) != 0) && (strcmp(".", dirent_ptr->d_name) != 0) ){
 
                 string linkPath = fdPath + "/" + dirent_ptr->d_name;
@@ -318,13 +318,11 @@ int scanProcess(uid_t uid){
                 int linkfd = readlink(linkPath.c_str(), buf, sizeof(buf));
                 if (linkfd == -1){
                     printf("Read process link failed\n");
-                    // exit(EXIT_FAILURE);
                 }
 
+                // TODO: use bettey way to parse inode of each fd
                 string fdEntry(buf);
                 struct procInfo inodeEntry;
-
-                // parse inode of each fd
                 if (fdEntry.find("socket:[") != string::npos){
                     // cout << fdEntry << endl; 
                     string sub1 = fdEntry.substr(0, fdEntry.find("]", 0));
@@ -371,86 +369,19 @@ void outputResult(struct optResult opt_res){
                     printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
                 }
 
-                string transProto;
-                if(connList[i].connType == 0)
-                    transProto = "tcp";
-                else if (connList[i].connType == 1)
-                    transProto = "tcp6";
-                else if (connList[i].connType == 2)
-                    transProto = "udp";
-                else if (connList[i].connType == 3)
-                    transProto = "udp6";
-
-                // check if any fields contains the filter_str
+                // filter feature is turned on
                 if(opt_res.filter_flag){
-                    // if(transProto.find(opt_res.filter_str) != string::npos ||
-                    //     connList[i].localAddr.find(opt_res.filter_str) != string::npos ||
-                    //     connList[i].remoteAddr.find(opt_res.filter_str) != string::npos ||
-                    //     inodeList[j].pid.find(opt_res.filter_str) != string::npos ||
-                    //     inodeList[j].procName.find(opt_res.filter_str) != string::npos
-                    // ) {
-                    //     printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
-                    // }
 
                     // regex filter
                     int regRes = regexec(&opt_res.regex_str, inodeList[j].procName.c_str(), 0, NULL, 0);
                     if(!regRes) {
-                        printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                        printf("%-5s %-40s %-40s %s / %s\n", connList[i].connStr.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                     }
                 }
                 else{
-                    printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                    printf("%-5s %-40s %-40s %s / %s\n", connList[i].connStr.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                 }
             }
-        }
-    }
-}
-
-void outputResultWithoutProc(struct optResult opt_res){
-    for(size_t i = 0; i < connList.size(); i++){
-        connList[i].localAddr  = ipConvert(connList[i].localAddr, connList[i].connType);
-        connList[i].remoteAddr = ipConvert(connList[i].remoteAddr, connList[i].connType); 
-    }
-
-    bool tcpTitleFlag = false;
-    bool udpTitleFlag = false;
-
-    for(size_t i = 0; i < connList.size(); i++){
-        if(connList[i].connType < 2 && !tcpTitleFlag){
-            tcpTitleFlag = true;
-            printf("\nList of TCP connections: \n");
-            printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-        }
-
-        if(connList[i].connType >= 2 && !udpTitleFlag){
-            udpTitleFlag = true;
-            printf("\nList of UDP connections: \n");
-            printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-        }
-
-        string transProto;
-        if(connList[i].connType == 0)
-            transProto = "tcp";
-        else if (connList[i].connType == 1)
-            transProto = "tcp6";
-        else if (connList[i].connType == 2)
-            transProto = "udp";
-        else if (connList[i].connType == 3)
-            transProto = "udp6";
-
-        // filter feature is turned on
-        if(opt_res.filter_flag){
-            
-            // check if any fields contains the filter_str
-            if(transProto.find(opt_res.filter_str) != string::npos ||
-                connList[i].localAddr.find(opt_res.filter_str) != string::npos ||
-                connList[i].remoteAddr.find(opt_res.filter_str) != string::npos
-            ) {
-                printf("%-5s %-40s %-40s -\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str());
-            }
-        }
-        else {
-            printf("%-5s %-40s %-40s -\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str());
         }
     }
 }
@@ -478,11 +409,7 @@ int main(int argc, char *argv[]){
     } 
     
     scanProcess(uid);
-
-    if (uid == 0)
-        outputResult(opt_res);
-    else 
-        outputResultWithoutProc(opt_res);
+    outputResult(opt_res);
 
     return 0;
 }

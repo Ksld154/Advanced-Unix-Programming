@@ -2,4 +2,4 @@
 
 Course: Advanced Unix Programming
 
-Semester: 2020 Spring
+Semester: Spring 2020
