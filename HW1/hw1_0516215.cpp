@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <regex>
 using namespace std;
 
 const string NET_FILE = "/proc/net/";
@@ -34,6 +35,7 @@ struct optResult {
     bool udp_flag;
     bool filter_flag;
     string filter_str;
+    regex_t regex_str;
 };
 
 vector <struct connInfo> connList;
@@ -171,13 +173,14 @@ string parseProcName(struct procInfo inodeEntry){
 
 struct optResult handleOptions(int argc, char *argv[]){
 
-    struct optResult opt_res{0, 0, 0, ""};
+    regex_t regEmpty;
+    struct optResult opt_res{0, 0, 0, "", regEmpty};
 
     int c;
     const char *optFormat = "tu";
     struct option opts[] = {
-        {"tcp", 0, NULL, 'v'},
-        {"udp", 0, NULL, 'n'}
+        {"tcp", 0, NULL, 't'},
+        {"udp", 0, NULL, 'u'}
     };
 
     while( (c = getopt_long(argc, argv, optFormat, opts, NULL)) != -1) {
@@ -194,8 +197,17 @@ struct optResult handleOptions(int argc, char *argv[]){
     }
 
     if(optind != argc){
+        // opt_res.filter_str = argv[optind];
+
+        regex_t regex;
+        int regexRes = regcomp(&regex, argv[optind], REG_EXTENDED);
+        if(regexRes) {
+            fprintf(stderr, "Could not compile regex\n");
+            return opt_res;
+        }
+
         opt_res.filter_flag = 1;
-        opt_res.filter_str = argv[optind];
+        opt_res.regex_str = regex;
     }
 
     return opt_res;
@@ -247,13 +259,11 @@ int scanProcess(uid_t uid){
     int regexRes = regcomp(&regex, "^[0-9]+$", REG_EXTENDED);
     if(regexRes) {
         fprintf(stderr, "Could not compile regex\n");
-        // exit(EXIT_FAILURE);
     }
     
     DIR *dir_ptr = opendir("/proc/");
     if(dir_ptr == NULL){
         printf("Fail to open /proc\n");
-        // exit(EXIT_FAILURE);
     }
 
     struct dirent *dirent_ptr; readdir(dir_ptr);  
@@ -341,7 +351,6 @@ void outputResult(struct optResult opt_res){
         connList[i].remoteAddr = ipConvert(connList[i].remoteAddr, connList[i].connType); 
     }
 
-
     bool tcpTitleFlag = false;
     bool udpTitleFlag = false;
 
@@ -350,17 +359,17 @@ void outputResult(struct optResult opt_res){
 
             // matched netstat entry
             if (connList[i].inode == inodeList[j].inode){
-                // if(connList[i].connType < 2 && !tcpTitleFlag){
-                //     tcpTitleFlag = true;
-                //     printf("\nList of TCP connections: \n");
-                //     printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                // }
+                if(connList[i].connType < 2 && !tcpTitleFlag){
+                    tcpTitleFlag = true;
+                    printf("\nList of TCP connections: \n");
+                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+                }
 
-                // if(connList[i].connType >= 2 && !udpTitleFlag){
-                //     udpTitleFlag = true;
-                //     printf("\nList of UDP connections: \n");
-                //     printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                // }
+                if(connList[i].connType >= 2 && !udpTitleFlag){
+                    udpTitleFlag = true;
+                    printf("\nList of UDP connections: \n");
+                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+                }
 
                 string transProto;
                 if(connList[i].connType == 0)
@@ -374,39 +383,22 @@ void outputResult(struct optResult opt_res){
 
                 // check if any fields contains the filter_str
                 if(opt_res.filter_flag){
-                    if(transProto.find(opt_res.filter_str) != string::npos ||
-                        connList[i].localAddr.find(opt_res.filter_str) != string::npos ||
-                        connList[i].remoteAddr.find(opt_res.filter_str) != string::npos ||
-                        inodeList[j].pid.find(opt_res.filter_str) != string::npos ||
-                        inodeList[j].procName.find(opt_res.filter_str) != string::npos
-                    ) {
-                        if(connList[i].connType < 2 && !tcpTitleFlag){
-                            tcpTitleFlag = true;
-                            printf("\nList of TCP connections: \n");
-                            printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                        }
+                    // if(transProto.find(opt_res.filter_str) != string::npos ||
+                    //     connList[i].localAddr.find(opt_res.filter_str) != string::npos ||
+                    //     connList[i].remoteAddr.find(opt_res.filter_str) != string::npos ||
+                    //     inodeList[j].pid.find(opt_res.filter_str) != string::npos ||
+                    //     inodeList[j].procName.find(opt_res.filter_str) != string::npos
+                    // ) {
+                    //     printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                    // }
 
-                        if(connList[i].connType >= 2 && !udpTitleFlag){
-                            udpTitleFlag = true;
-                            printf("\nList of UDP connections: \n");
-                            printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                        }
+                    // regex filter
+                    int regRes = regexec(&opt_res.regex_str, inodeList[j].procName.c_str(), 0, NULL, 0);
+                    if(!regRes) {
                         printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                     }
-
                 }
                 else{
-                    if(connList[i].connType < 2 && !tcpTitleFlag){
-                        tcpTitleFlag = true;
-                        printf("\nList of TCP connections: \n");
-                        printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                    }
-
-                    if(connList[i].connType >= 2 && !udpTitleFlag){
-                        udpTitleFlag = true;
-                        printf("\nList of UDP connections: \n");
-                        printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                    }
                     printf("%-5s %-40s %-40s %s / %s\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                 }
             }
@@ -424,6 +416,17 @@ void outputResultWithoutProc(struct optResult opt_res){
     bool udpTitleFlag = false;
 
     for(size_t i = 0; i < connList.size(); i++){
+        if(connList[i].connType < 2 && !tcpTitleFlag){
+            tcpTitleFlag = true;
+            printf("\nList of TCP connections: \n");
+            printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+        }
+
+        if(connList[i].connType >= 2 && !udpTitleFlag){
+            udpTitleFlag = true;
+            printf("\nList of UDP connections: \n");
+            printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+        }
 
         string transProto;
         if(connList[i].connType == 0)
@@ -435,38 +438,18 @@ void outputResultWithoutProc(struct optResult opt_res){
         else if (connList[i].connType == 3)
             transProto = "udp6";
 
-        // check if any fields contains the filter_str
+        // filter feature is turned on
         if(opt_res.filter_flag){
+            
+            // check if any fields contains the filter_str
             if(transProto.find(opt_res.filter_str) != string::npos ||
                 connList[i].localAddr.find(opt_res.filter_str) != string::npos ||
                 connList[i].remoteAddr.find(opt_res.filter_str) != string::npos
             ) {
-                if(connList[i].connType < 2 && !tcpTitleFlag){
-                    tcpTitleFlag = true;
-                    printf("\nList of TCP connections: \n");
-                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                }
-
-                if(connList[i].connType >= 2 && !udpTitleFlag){
-                    udpTitleFlag = true;
-                    printf("\nList of UDP connections: \n");
-                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-                }
                 printf("%-5s %-40s %-40s -\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str());
             }
         }
         else {
-            if(connList[i].connType < 2 && !tcpTitleFlag){
-                tcpTitleFlag = true;
-                printf("\nList of TCP connections: \n");
-                printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-            }
-
-            if(connList[i].connType >= 2 && !udpTitleFlag){
-                udpTitleFlag = true;
-                printf("\nList of UDP connections: \n");
-                printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
-            }
             printf("%-5s %-40s %-40s -\n", transProto.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str());
         }
     }
