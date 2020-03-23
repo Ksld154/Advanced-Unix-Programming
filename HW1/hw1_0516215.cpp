@@ -35,7 +35,6 @@ struct optResult {
     bool tcp_flag;
     bool udp_flag;
     bool filter_flag;
-    string filter_str;
     regex_t regex_str;
 };
 
@@ -48,7 +47,7 @@ string parseProcName(struct procInfo);
 
 struct optResult handleOptions(int, char**);
 int  scanConnection(string connType);
-int  scanProcess(uid_t uid);
+int  scanProcess();
 void outputResult(struct optResult opt_res);
 
 struct connInfo parseConnEntry(char *line, int connType, string connStr){
@@ -159,8 +158,8 @@ string parseProcName(struct procInfo inodeEntry){
     }
     fclose(fd);
 
-    // change separater of each arg from '\0' to ' '(space),
-    // and discard first arg
+    // change separater of each arg from '\0' to ' '(space), 
+    // and discard first arg(i.e. proc path)
     std::replace(procArg.begin(), procArg.end(), '\0', ' ');
     if (procArg.find(" ") == string::npos){
         procArg = "";
@@ -201,8 +200,20 @@ struct optResult handleOptions(int argc, char *argv[]){
     // We got a filter rule
     if(optind != argc){
 
+        // First: concat argv by " ", to get regex_fllter 
+        string filter_concat;
+        for(int i = optind; i < argc; i++){
+            filter_concat += argv[i];
+            filter_concat += " ";
+        }
+        // remove trailing ' '
+        if(filter_concat.length() > 0){
+            filter_concat.pop_back(); 
+        }
+
+        // compile regexp rule
         regex_t regex;
-        int regexRes = regcomp(&regex, argv[optind], REG_EXTENDED);
+        int regexRes = regcomp(&regex, filter_concat.c_str(), REG_EXTENDED);
         if(regexRes) {
             fprintf(stdout, "Could not compile regex\n");
             exit(EXIT_FAILURE);
@@ -259,7 +270,7 @@ int scanConnection(string connType){
     return 0;
 }
 
-int scanProcess(uid_t uid){
+int scanProcess(){
 
     // regexp for PID folder
     regex_t regex;
@@ -268,12 +279,19 @@ int scanProcess(uid_t uid){
         fprintf(stderr, "Could not compile regex\n");
     }
     
+    // regexp for "socket:[inode]" or [0000]:inode
+    std::regex socket_pattern("^socket:\\[([0-9]+)\\]");
+    std::regex socket_pattern2("^\\[0000\\]:([0-9]+)");
+
+
+
+
     DIR *dir_ptr = opendir("/proc/");
     if(dir_ptr == NULL){
         printf("Fail to open /proc\n");
     }
     
-    // scan for pidFolders
+    // scan for "pidFolders"
     struct dirent *dirent_ptr; readdir(dir_ptr);  
     int dfd = dirfd(dir_ptr);
     vector <string> pidFolders;
@@ -322,12 +340,12 @@ int scanProcess(uid_t uid){
 
                 // TODO: use bettey way to parse inode of each fd
                 string fdEntry(buf);
+                std::smatch match_groups;
                 struct procInfo inodeEntry;
-                if (fdEntry.find("socket:[") != string::npos){
-                    // cout << fdEntry << endl; 
-                    string sub1 = fdEntry.substr(0, fdEntry.find("]", 0));
-                    string inode = sub1.substr(fdEntry.find("[", 0)+1);
 
+                if(regex_search(fdEntry, match_groups, socket_pattern) || regex_search(fdEntry, match_groups, socket_pattern2)){
+                    
+                    string inode = match_groups.str(1);
                     inodeEntry.inode = inode;
                     inodeEntry.pid = pidFolders[i];
                     inodeEntry.procName = parseProcName(inodeEntry);
@@ -371,7 +389,6 @@ void outputResult(struct optResult opt_res){
 
                 // filter feature is turned on
                 if(opt_res.filter_flag){
-
                     // regex filter
                     int regRes = regexec(&opt_res.regex_str, inodeList[j].procName.c_str(), 0, NULL, 0);
                     if(!regRes) {
@@ -388,8 +405,6 @@ void outputResult(struct optResult opt_res){
 
 
 int main(int argc, char *argv[]){
-
-    uid_t uid = geteuid();
     
     struct optResult opt_res = handleOptions(argc, argv);
 
@@ -408,7 +423,7 @@ int main(int argc, char *argv[]){
         scanConnection("udp6");
     } 
     
-    scanProcess(uid);
+    scanProcess();
     outputResult(opt_res);
 
     return 0;
