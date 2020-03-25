@@ -85,8 +85,12 @@ string ipConvert(string ipAddrWithPort, int connType){
     // sscanf: convert string port(hex format) to int port
     // to_string: convert int to string, using decimal format
     int portInt;
+    string portStr;
     sscanf(port.c_str(), ":%X", &portInt);
-    port = ":" + to_string(portInt);
+    portStr = to_string(portInt);
+    if(portStr == "0")
+        portStr = "*";
+    port = ":" + portStr;
 
     // ipv4
     char ipBuf[INET6_ADDRSTRLEN];
@@ -155,54 +159,31 @@ string parseProcName(struct procInfo inodeEntry){
         return "";
     }
 
-    // 2-1. Get cmdline size first
-    int c;
-    int cmdline_size = 0;
-    while((c=fgetc(fd)) != EOF){
-        cmdline_size++;
+    // 2-1: Build CONCATED_ARG, each single args are separated by " "(space)
+    //          (Default cases) If the args are separated by '\0',
+    //              then get every single argument from cmdline, and concate them with " "(space).
+    //          (Strange cases) If args are seperated by ' '(space),
+    //              the treat all these args as a big SINGLE arg, and append with a " "(space).
+    //              btw, there's no special meaning to append a " ", 
+    //              just to lazy to handle this strange case w/ extra codes
+    string arg_res = "";
+    char *single_arg = NULL;
+    while(getdelim(&single_arg, &n, 0x00, fd) != EOF){
+        arg_res = arg_res + (string)single_arg + " ";
     }
+    free(single_arg);
     fclose(fd);
 
-    FILE *fd2 = fopen(cmdFile.c_str(), "r");
-    if (fd2 == NULL){
-        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
-        fclose(fd2);
-        return "";
-    }
+    procArg = arg_res;
 
-    // 2-2. allocate memory for entire content, and filled it with '\0'
-    char *arg_buf;
-    arg_buf = (char *)calloc(1, cmdline_size+1);
-    if(!arg_buf){
-        fclose(fd2);
-        printf("memory alloc fails\n");
-        exit(EXIT_FAILURE);
-    }
-
-    // 2-3. Retrieve all program arguments from cmdline file
-    int i = 0;
-    while((c=fgetc(fd2)) != EOF){
-        if(c == 0x00){
-            c = ' ';
-        }
-        arg_buf[i++] = c;
-    }
-    fclose(fd2);
-
-    arg_buf[cmdline_size] = 0x00;
-    procArg = arg_buf;
-    free(arg_buf);
-
-    // 2-4. change separater of each arg from '\0' to ' '(space), 
-    // and discard first arg(i.e. proc path)
-    std::replace(procArg.begin(), procArg.end(), '\0', ' ');
-    if (procArg.find(" ") == string::npos){
+    // 2-2. Discard first arg (i.e. proc path) of the CONCATED_ARG
+    if (procArg.find(" ") == string::npos){     // cannot find a " ", means that there is no args
         procArg = "";
     }
     else {
         procArg = procArg.substr(procArg.find(" ", 0)+1);
     }
-    // cout << procArg << endl;
+    // cout << procName + " " + procArg << endl;
 
     return procName + " " + procArg;
 }
@@ -289,6 +270,7 @@ int scanConnection(string connType){
     const string connPath = NET_FILE + connType;
     fp = fopen(connPath.c_str(), "r");
     if (fp == NULL){
+        fclose(fp);
         printf("Fail to open connection file %s\n", connPath.c_str());
         exit(EXIT_FAILURE);
         return -1;
@@ -336,7 +318,7 @@ int scanProcess(){
 
         struct stat statbuf;
         if(fstatat(dfd, dirent_ptr->d_name, &statbuf, 0) == -1) {
-            printf("fstatat call error!\n");
+            printf("fstatat call error! Will skip it and scan for next /proc/${PID} folders\n");
             continue;
         }
 
