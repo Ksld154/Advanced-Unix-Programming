@@ -101,7 +101,6 @@ string ipConvert(string ipAddrWithPort, int connType){
             printf("IP convert failed!\n");
             return "";
         }
-
     } 
     
     // ipv6
@@ -131,10 +130,11 @@ string parseProcName(struct procInfo inodeEntry){
     char    *line = NULL;
     size_t  n = 0; 
     
-    // Get Process Name
+    // 1. Get Process Name from "comm"
     fd = fopen(commFile.c_str(), "r");
     if (fd == NULL){
         printf("[ERROR] failed to open %s\n", cmdFile.c_str());
+        fclose(fd);
         return "";
     }
     while(getline(&line, &n, fd) != -1){
@@ -147,18 +147,53 @@ string parseProcName(struct procInfo inodeEntry){
         procName.pop_back(); 
     }
 
-    // Get process arguments
+    // 2. Get process arguments from "cmdline"
     fd = fopen(cmdFile.c_str(), "r");
     if (fd == NULL){
         printf("[ERROR] failed to open %s\n", cmdFile.c_str());
+        fclose(fd);
         return "";
     }
-    while(getline(&line, &n, fd) != -1){
-        procArg = line;
+
+    // 2-1. Get cmdline size first
+    int c;
+    int cmdline_size = 0;
+    while((c=fgetc(fd)) != EOF){
+        cmdline_size++;
     }
     fclose(fd);
 
-    // change separater of each arg from '\0' to ' '(space), 
+    FILE *fd2 = fopen(cmdFile.c_str(), "r");
+    if (fd2 == NULL){
+        printf("[ERROR] failed to open %s\n", cmdFile.c_str());
+        fclose(fd2);
+        return "";
+    }
+
+    // 2-2. allocate memory for entire content, and filled it with '\0'
+    char *arg_buf;
+    arg_buf = (char *)calloc(1, cmdline_size+1);
+    if(!arg_buf){
+        fclose(fd2);
+        printf("memory alloc fails\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // 2-3. Retrieve all program arguments from cmdline file
+    int i = 0;
+    while((c=fgetc(fd2)) != EOF){
+        if(c == 0x00){
+            c = ' ';
+        }
+        arg_buf[i++] = c;
+    }
+    fclose(fd2);
+
+    arg_buf[cmdline_size] = 0x00;
+    procArg = arg_buf;
+    free(arg_buf);
+
+    // 2-4. change separater of each arg from '\0' to ' '(space), 
     // and discard first arg(i.e. proc path)
     std::replace(procArg.begin(), procArg.end(), '\0', ' ');
     if (procArg.find(" ") == string::npos){
@@ -167,6 +202,7 @@ string parseProcName(struct procInfo inodeEntry){
     else {
         procArg = procArg.substr(procArg.find(" ", 0)+1);
     }
+    // cout << procArg << endl;
 
     return procName + " " + procArg;
 }
@@ -174,8 +210,10 @@ string parseProcName(struct procInfo inodeEntry){
 
 struct optResult handleOptions(int argc, char *argv[]){
 
-    regex_t regEmpty;
-    struct optResult opt_res{0, 0, 0, "", regEmpty};
+    struct optResult opt_res;
+    opt_res.tcp_flag = 0;
+    opt_res.udp_flag = 0;
+    opt_res.filter_flag = 0;
 
     int c;
     const char *optFormat = "tu";
@@ -193,7 +231,7 @@ struct optResult handleOptions(int argc, char *argv[]){
                 opt_res.udp_flag = 1;
                 break;
             default:
-                printf("Not Valid option! Will ignore it.\n");
+                printf("NOT a valid option! Will ignore it.\n");
         }
     }
 
@@ -215,7 +253,7 @@ struct optResult handleOptions(int argc, char *argv[]){
         regex_t regex;
         int regexRes = regcomp(&regex, filter_concat.c_str(), REG_EXTENDED);
         if(regexRes) {
-            fprintf(stdout, "Could not compile regex\n");
+            fprintf(stdout, "Could not compile filter regex\n");
             exit(EXIT_FAILURE);
             return opt_res;
         }
@@ -243,7 +281,6 @@ int scanConnection(string connType){
         conn = 3;
     }
     
-
     FILE    *fp;
     char    *line = NULL;
     size_t  n = 0;
@@ -253,6 +290,7 @@ int scanConnection(string connType){
     fp = fopen(connPath.c_str(), "r");
     if (fp == NULL){
         printf("Fail to open connection file %s\n", connPath.c_str());
+        exit(EXIT_FAILURE);
         return -1;
     }
 
@@ -276,19 +314,18 @@ int scanProcess(){
     regex_t regex;
     int regexRes = regcomp(&regex, "^[0-9]+$", REG_EXTENDED);
     if(regexRes) {
-        fprintf(stderr, "Could not compile regex\n");
+        fprintf(stderr, "Could not compile pid folder regex\n");
+        exit(EXIT_FAILURE);
     }
     
     // regexp for "socket:[inode]" or [0000]:inode
     std::regex socket_pattern("^socket:\\[([0-9]+)\\]");
     std::regex socket_pattern2("^\\[0000\\]:([0-9]+)");
 
-
-
-
     DIR *dir_ptr = opendir("/proc/");
     if(dir_ptr == NULL){
         printf("Fail to open /proc\n");
+        exit(EXIT_FAILURE);
     }
     
     // scan for "pidFolders"
@@ -300,6 +337,7 @@ int scanProcess(){
         struct stat statbuf;
         if(fstatat(dfd, dirent_ptr->d_name, &statbuf, 0) == -1) {
             printf("fstatat call error!\n");
+            continue;
         }
 
         // it is a folder && folder name is PID 
@@ -314,7 +352,6 @@ int scanProcess(){
 
     // scan for "fd folder" inside pidFolders
     for (size_t i = 0; i < pidFolders.size(); i++){
-
         string fdPath = "/proc/" + pidFolders[i] + "/fd"; 
         
         // a non-root user may not open fd folders that belong to other users
@@ -328,21 +365,20 @@ int scanProcess(){
         while( (dirent_ptr = readdir(dir_ptr)) != NULL) {
             
             if( (strcmp("..", dirent_ptr->d_name) != 0) && (strcmp(".", dirent_ptr->d_name) != 0) ){
-
                 string linkPath = fdPath + "/" + dirent_ptr->d_name;
                 char buf[512];
 
                 // use fd to access symbolic link
                 int linkfd = readlink(linkPath.c_str(), buf, sizeof(buf));
                 if (linkfd == -1){
-                    printf("Read process link failed\n");
+                    printf("Read process's link failed, will skip this link\n");
+                    continue;
                 }
 
-                // TODO: use bettey way to parse inode of each fd
+                // get inode and process name of each connections that the link points to
                 string fdEntry(buf);
                 std::smatch match_groups;
                 struct procInfo inodeEntry;
-
                 if(regex_search(fdEntry, match_groups, socket_pattern) || regex_search(fdEntry, match_groups, socket_pattern2)){
                     
                     string inode = match_groups.str(1);
@@ -378,13 +414,13 @@ void outputResult(struct optResult opt_res){
                 if(connList[i].connType < 2 && !tcpTitleFlag){
                     tcpTitleFlag = true;
                     printf("\nList of TCP connections: \n");
-                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+                    printf("%-5s %-46s %-46s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
                 }
 
                 if(connList[i].connType >= 2 && !udpTitleFlag){
                     udpTitleFlag = true;
                     printf("\nList of UDP connections: \n");
-                    printf("%-5s %-40s %-40s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
+                    printf("%-5s %-46s %-46s %s\n", "Proto", "Local Address", "Remote Address", "PID / Program names and arguments");
                 }
 
                 // filter feature is turned on
@@ -392,11 +428,11 @@ void outputResult(struct optResult opt_res){
                     // regex filter
                     int regRes = regexec(&opt_res.regex_str, inodeList[j].procName.c_str(), 0, NULL, 0);
                     if(!regRes) {
-                        printf("%-5s %-40s %-40s %s / %s\n", connList[i].connStr.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                        printf("%-5s %-46s %-46s %s / %s\n", connList[i].connStr.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                     }
                 }
                 else{
-                    printf("%-5s %-40s %-40s %s / %s\n", connList[i].connStr.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
+                    printf("%-5s %-46s %-46s %s / %s\n", connList[i].connStr.c_str(), connList[i].localAddr.c_str(), connList[i].remoteAddr.c_str(), inodeList[j].pid.c_str(), inodeList[j].procName.c_str());
                 }
             }
         }
