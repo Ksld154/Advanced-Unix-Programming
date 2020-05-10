@@ -9,15 +9,21 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
-// #define REAL_SYS(){ \
-    
-//     if(old_chdir == NULL) {
-//         void *handle = dlopen("libc.so.6", RTLD_LAZY);
-//         if(handle != NULL)
-//             old_chdir = dlsym(handle, "chdir");
-//     }
 
-// }
+int chdir(const char *);
+int chmod(const char *, mode_t);
+int chown(const char *, uid_t, gid_t);
+int creat(const char *, mode_t);
+int creat64(const char *, mode_t);
+FILE* fopen(const char *, const char *);
+FILE* fopen64(const char *, const char *);
+int link(const char *, const char *);
+int mkdir(const char *, mode_t );
+int open(const char *, int, ...);
+int open64(const char *, int, ...);
+int openat(int, const char *, int, ...);
+int openat64(int, const char *, int, ...);
+
 DIR *opendir(const char *);
 ssize_t readlink(const char *, char *, size_t);
 int remove(const char *);
@@ -39,32 +45,31 @@ int system(const char *);
 
 int is_in_cwd(const char *file) {
     
-    // absolute path of cwd
-    char abs_cwd[FILENAME_MAX];
-    strncpy(abs_cwd, getenv("MY_BASEDIR"), sizeof(getenv("MY_BASEDIR")) );
-    // if (abs_cwd != NULL) {
-    //     printf("Current working dir: %s\n", abs_cwd);
-    // }
+    // absolute path of BaseDir
+    char absBaseDir[FILENAME_MAX];
+    strcpy(absBaseDir, getenv("MY_BASEDIR"));
 
-    // base path for filePath 
+    // 1. base directory for filePath 
     char *filePath = strdup(file);
     char abs_filePath[FILENAME_MAX] = {0};
-    int rootFlag = 0;
-    if(filePath[0] == '/') {
-        rootFlag = 1;
+    if(strlen(filePath) < 1) {
+        return -1;
     }
-    else if (filePath[0] == '.') {
-        strncpy(abs_filePath, abs_cwd, sizeof(abs_cwd));
+
+    // 2. set the base_dir of filePath
+    if(filePath[0] == '.') {
+        // use cwd as base_dir of filePath
+        getcwd(abs_filePath, sizeof(abs_filePath));
     }
     else {
         printf("[ERROR] Wrong file path format!");
         return -1;
     }
-    // printf("filePath: %s\n", filePath);
     
-    // parse relative path to abs. path
+    // 3. parse relative path to abs. path
     if(strcmp(filePath, "/") != 0) {
         char *ptr;
+        int startflag = 0;
         for(ptr = strtok(filePath, "/"); ptr; ptr = strtok(NULL, "/")) {
 
             if(strcmp(ptr, "..") == 0) {
@@ -84,32 +89,31 @@ int is_in_cwd(const char *file) {
                 // normal folder/file name, just append it
                 strncat(abs_filePath, "/", sizeof("/"));
                 strncat(abs_filePath, ptr, sizeof(ptr));
-                // printf("%s\n", abs_filePath);
             }
         }
     }
-
-    // default as "/"
-    if(strcmp(abs_filePath, "") == 0 && rootFlag){
+    else{
         strncpy(abs_filePath, "/", sizeof("/"));
     }
-    // printf("Abs path: %s\n", abs_filePath);
+
+    // default as "/"
+    // if(strcmp(abs_filePath, "") == 0 && rootFlag){
+    //     strncpy(abs_filePath, "/", sizeof("/"));
+    // }
+
+    printf("Abs      cwd: %s\n", absBaseDir);
+    printf("Abs arg path: %s\n", abs_filePath);
     
-    // compare abs_cwd and abs_filePath
-    int parent_len = strlen(abs_cwd);
+    // compare absBaseDir and abs_filePath
+    int parent_len = strlen(absBaseDir);
     int child_len = strlen(abs_filePath);
     int is_in_cwd = 0;
-    if( (strncmp(abs_cwd, abs_filePath, strlen(abs_cwd)) == 0) \
-        && ( parent_len == child_len || abs_filePath[parent_len-1] == '/') \
+    if( (strncmp(absBaseDir, abs_filePath, strlen(absBaseDir)) == 0) \
+        && ( parent_len <= child_len) \
     ){    
         is_in_cwd = 1;
     }
-    // printf("%d\n", strncmp(abs_cwd, abs_filePath, strlen(abs_cwd)) == 0);
-    // printf("%d\n", abs_filePath[parent_len-1] == '/');
-    // printf("%c\n", abs_filePath[parent_len-1]);
 
-    // printf("abs file path: %s\n", abs_filePath);
-    // printf("is in cwd: %d\n", is_in_cwd);
     return is_in_cwd;
 }
 

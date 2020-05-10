@@ -3,8 +3,8 @@
 
 all: build
 
-test: build
-	LD_PRELOAD=./sandbox.so ./sandbox
+testcode: build
+	gcc test_code.c -o test_code
 
 cwdfile:
 	gcc cwd.c -o cwd
