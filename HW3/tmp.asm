@@ -1,40 +1,58 @@
-
 main1:
-    mov ecx, -1
-    mov edi, 9                      ; ARRAY_LEN-1
-    jmp outerLoop
-
-swap:
-    mov [0x600000+edx*4], ebx
-    mov [0x600000+edx*4+4], eax
-    inc edx
-    jmp inner_loop
-
-inner_loop:                         ; for(int j = 0; j < ARRAY_LEN-i; j++)
-    cmp edx, edi
-    jge outerLoop
-
-    mov eax, [0x600000+edx*4]
-    mov ebx, [0x600000+edx*4+4]
-    cmp eax, ebx                    ; if(arr[j] > arr[j+1]) 
-    jg swap                         ;     swap(arr[j], arr[j+1])
-                        
-    inc edx
-    jmp inner_loop
-
-
-outerLoop:
-    cmp ecx, 9
-    jge outerExit
-
-    inc ecx
-    mov edx, 0                    ; inner loop's j
-    jmp inner_loop
     
-    sub edi, 1
-    jmp outerLoop
+    mov rdi, 4                          ; n
+    mov rax, 0                          ; res
+    mov rdx, 0
+    mov ecx, 0                          ; counter
+
+    call recur
+    jmp fin
 
 
-outerExit:
+recur:
+    inc ecx 
+    
+    case0:
+        cmp rdi, 0                          ; if (n <= 0) {
+        jne case1                           ;     return 0;    
+        mov rax, 0                          ; }
+        ret                          
+    
+    case1:
+        cmp rdi, 1                          ; else if (n == 1) {
+        jne case2                           ;     return 1;
+        mov rax, 1                          ; }
+        ret
+
+    case2: 
+        ; 2*recur(n-1)                      ; else {
+        ; mov rsi, rdi                      ;     return 2*recur(n-1) + 3*recur(n-2)
+        push rdi                            ; }
+        sub rdi, 1                          
+        call recur
+        mov rbx, 2
+        mul rbx
+        push rax
+
+
+        ; 3*recur(n-2)
+        pop rdx
+        pop rdi
+
+        sub rdi, 2
+        call recur
+        mov rbx, 3
+        mul rbx
+
+
+        ; mov rdi, rsi
+
+        ; 2*recur(n-1) + 3*recur(n-2)
+        add rdx, rax        
+        mov rax, rdx
+        
+        ret 
+
+fin:
 
 done:
