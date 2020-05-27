@@ -6,10 +6,6 @@ all: build
 testcode: build
 	gcc test_code.c -o test_code
 
-cwdfile:
-	gcc cwd.c -o cwd
-	# ./cwd
-
 sample1:
 	gcc -o sample -Wall -g sample.c
 	nm -D sample
@@ -19,7 +15,7 @@ sample_big:
 build:
 	gcc -g sandbox.c -o sandbox
 	gcc -o sandbox.so -shared -fPIC injected_library.c -ldl
-	LD_PRELOAD=./sandbox.so
 
 clean:
 	rm -f sandbox
+	rm -f sandbox.so

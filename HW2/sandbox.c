@@ -35,14 +35,13 @@ struct option_arg handleOptions(int argc, char *argv[]) {
             case '?':
                 printf("Invalid option -- '%c' \n", optopt);
                 printf("usage: ./sandbox [-p sopath] [-d basedir] [--] cmd [cmd args ...]\n");
-                printf("-p: set the path to sandbox.so, default = ./sandbox.so\n");
-                printf("-d: the base directory that is allowed to access, default = .\n");
-                printf("--: seperate the arguments for sandbox and for the executed command\n");
+                printf("        -p: set the path to sandbox.so, default = ./sandbox.so\n");
+                printf("        -d: the base directory that is allowed to access, default = .\n");
+                printf("        --: seperate the arguments for sandbox and for the executed command\n");
                 oArg.errOption = 1;
                 break;
         }
     }
-
 
     oArg.optind = optind;
     if(strcmp(oArg.soPath, "") == 0)
@@ -53,12 +52,18 @@ struct option_arg handleOptions(int argc, char *argv[]) {
     char realBaseDir[FILENAME_MAX];
     realpath(oArg.baseDir, realBaseDir);
     strncpy(oArg.baseDir, realBaseDir, sizeof(realBaseDir));
-    
+    // printf("Base Dir: %s\n", oArg.baseDir);
+
     return oArg;
 }
 
 
 int main(int argc, char *argv[]) {
+    
+    if(argc == 1) {
+        printf("No command given.\n");
+        return 0;
+    }
 
     struct option_arg opt_arg = handleOptions(argc, argv);
     if(opt_arg.errOption) {
@@ -66,13 +71,12 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-
     char *cmd[argc+1];
     int i = 0;
     for(int j = opt_arg.optind; j < argc; j++) {
-        cmd[i] = argv[j];
-        i++;
+        cmd[i++] = argv[j];
     }
+    cmd[i] = NULL;
     
     setenv("LD_PRELOAD", opt_arg.soPath, 1);
     setenv("MY_BASEDIR", opt_arg.baseDir, 1);

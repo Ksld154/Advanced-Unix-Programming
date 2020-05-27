@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <errno.h>
 
 
 int chdir(const char *);
@@ -49,29 +50,30 @@ int is_in_cwd(const char *file) {
     char absBaseDir[FILENAME_MAX];
     strcpy(absBaseDir, getenv("MY_BASEDIR"));
 
-    // 1. base directory for filePath 
+
     char *filePath = strdup(file);
     char abs_filePath[FILENAME_MAX] = {0};
     if(strlen(filePath) < 1) {
+        printf("[sandbox] Wrong file path format!\n");
         return -1;
     }
 
-    // 2. set the base_dir of filePath
+    // 1. set the base_dir of filePath
     if(filePath[0] == '.') {
         // use cwd as base_dir of filePath
         getcwd(abs_filePath, sizeof(abs_filePath));
     }
-    else {
-        printf("[ERROR] Wrong file path format!");
+    else if (filePath[0] != '/'){
+        printf("[sandbox] Wrong file path format!\n");
         return -1;
     }
     
-    // 3. parse relative path to abs. path
+    // 2. parse relative path to abs. path
     if(strcmp(filePath, "/") != 0) {
         char *ptr;
         int startflag = 0;
         for(ptr = strtok(filePath, "/"); ptr; ptr = strtok(NULL, "/")) {
-
+            // printf("%s\n", ptr);
             if(strcmp(ptr, "..") == 0) {
                 // go-back
                 for(int i = strlen(abs_filePath)-1; i >= 0; i--){
@@ -88,21 +90,17 @@ int is_in_cwd(const char *file) {
             else {
                 // normal folder/file name, just append it
                 strncat(abs_filePath, "/", sizeof("/"));
-                strncat(abs_filePath, ptr, sizeof(ptr));
+                strncat(abs_filePath, ptr, strlen(ptr)+1);
             }
+            // printf("abs: %s\n", abs_filePath);
         }
     }
-    else{
+    else { 
         strncpy(abs_filePath, "/", sizeof("/"));
     }
 
-    // default as "/"
-    // if(strcmp(abs_filePath, "") == 0 && rootFlag){
-    //     strncpy(abs_filePath, "/", sizeof("/"));
-    // }
-
-    printf("Abs      cwd: %s\n", absBaseDir);
-    printf("Abs arg path: %s\n", abs_filePath);
+    // printf("Abs      cwd: %s\n", absBaseDir);
+    // printf("Abs arg path: %s\n", abs_filePath);
     
     // compare absBaseDir and abs_filePath
     int parent_len = strlen(absBaseDir);
@@ -116,8 +114,6 @@ int is_in_cwd(const char *file) {
 
     return is_in_cwd;
 }
-
-
 
 
 static int (*old_chdir)(const char*) = NULL; /* function pointer */
@@ -134,6 +130,7 @@ int chdir(const char *path) {
         int allowed_path = is_in_cwd(path);
         if(allowed_path != 1) {
             printf("[sandbox] chdir: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         resp = old_chdir(path);
@@ -156,6 +153,7 @@ int chmod(const char *path, mode_t mode) {
         int allowed_path = is_in_cwd(path);
         if(allowed_path != 1) {
             printf("[sandbox] chmod: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp = old_chmod(path, mode);
@@ -176,6 +174,7 @@ int chown(const char *path, uid_t owner, gid_t group) {
         int allowed_path = is_in_cwd(path);
         if(allowed_path != 1) {
             printf("[sandbox] chown: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp = real_chown(path, owner, group);
@@ -196,6 +195,7 @@ int creat(const char *path, mode_t mode) {
         int allowed_path = is_in_cwd(path);
         if(allowed_path != 1) {
             printf("[sandbox] creat: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp = real_creat(path, mode);
@@ -216,6 +216,7 @@ int creat64(const char *path, mode_t mode) {
         int allowed_path = is_in_cwd(path);
         if(allowed_path != 1) {
             printf("[sandbox] creat64: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp = real_creat64(path, mode);
@@ -277,10 +278,12 @@ int link(const char *path1, const char *path2) {
         // int allowed_path2 = is_in_cwd(path2);
         if(is_in_cwd(path1) != 1) {
             printf("[sandbox] link: link from %s is not allowed \n", path1);
+            errno = EACCES;
             return -1;
         }
         if(is_in_cwd(path2) != 1) {
             printf("[sandbox] link: link to %s is not allowed \n", path2);
+            errno = EACCES;
             return -1;
         }
         int resp = real_link(path1, path2);
@@ -325,6 +328,7 @@ int open(const char *path, int flags, ...) {
     if(real_open != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] open: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp = real_open(path, flags, mode);
@@ -348,6 +352,7 @@ int open64(const char *path, int flags, ...) {
     if(real_open64 != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] open64: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         
@@ -372,6 +377,7 @@ int openat(int dirfd, const char *path, int flags, ...) {
     if(real_open != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] openat: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         
@@ -397,6 +403,7 @@ int openat64(int dirfd, const char *path, int flags, ...) {
     if(real_openat64 != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] openat64: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         
@@ -439,6 +446,7 @@ ssize_t readlink(const char *path, char *buf, size_t bufsize) {
         int allowed_path = is_in_cwd(path);
         if(allowed_path != 1) {
             printf("[sandbox] readlink: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         ssize_t resp =real_readlink(path, buf, bufsize);
@@ -458,6 +466,7 @@ int remove(const char *path) {
     if(real_remove != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] remove: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp =real_remove(path);
@@ -478,6 +487,7 @@ int rename(const char *oldpath, const char *newpath) {
     if(real_rename != NULL){
         if(is_in_cwd(oldpath) != 1 || is_in_cwd(newpath) != 1) {
             printf("[sandbox] rename: rename from %s to %s is not allowed \n", oldpath, newpath);
+            errno = EACCES;
             return -1;
         }
         int resp =real_rename(oldpath, newpath);
@@ -498,6 +508,7 @@ int rmdir(const char *path) {
     if(real_rmdir != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] rmdir: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp =real_rmdir(path);
@@ -517,6 +528,7 @@ int __xstat(int ver, const char *path, struct stat *stat_buf) {
     if(real_xstat != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] __xstat: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp =real_xstat(ver, path, stat_buf);
@@ -536,6 +548,7 @@ int __xstat64(int ver, const char *path, struct stat *stat_buf) {
     if(real_xstat64 != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] __xstat64: access to %s is not allowed \n", path);
+            errno = EACCES;
             return -1;
         }
         int resp =real_xstat64(ver, path, stat_buf);
@@ -555,6 +568,7 @@ int symlink(const char *target, const char *linkpath) {
     if(real_symlink != NULL){
         if(is_in_cwd(target) != 1 || is_in_cwd(linkpath) != 1) {
             printf("[sandbox] symlink: symlink from %s to %s is not allowed \n", target, linkpath);
+            errno = EACCES;
             return -1;
         }
         int resp =real_symlink(target, linkpath);
@@ -574,6 +588,7 @@ int unlink(const char *path) {
     if(real_unlink != NULL){
         if(is_in_cwd(path) != 1) {
             printf("[sandbox] unlink: unlink %s is not allowed \n",path);
+            errno = EACCES;
             return -1;
         }
         int resp =real_unlink(path);
@@ -583,23 +598,30 @@ int unlink(const char *path) {
 }
 
 int execl(const char *path, const char *arg, ... /* (char  *) NULL */) {
+    errno = EACCES;
     return -1;
 }
 int execlp(const char *file, const char *arg, ... /* (char  *) NULL */) {
+    errno = EACCES;
     return -1;
 }
 int execle(const char *path, const char *arg, ... /*, (char *) NULL, char * const envp[] */) {
+    errno = EACCES;
     return -1;
 }
 int execv(const char *path, char *const argv[]) {
+    errno = EACCES;
     return -1;
 }
 int execvp(const char *file, char *const argv[]) {
+    errno = EACCES;
     return -1;
 }
 int execve(const char *path, char *const argv[], char *const envp[]) {
+    errno = EACCES;
     return -1;
 }
 int system(const char *command) {
+    errno = EACCES;
     return -1;
 }
