@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <assert.h>
 
-char* filePath = "/mnt/d/Homework/Advanced-Unix-Programming/HW4/traceme";
+char* filePath = "/mnt/d/Homework/Advanced-Unix-Programming/HW4/P1/traceme";
 
 int main() {
     pid_t child;
