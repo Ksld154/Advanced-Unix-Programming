@@ -7,8 +7,8 @@
 #include <sys/user.h>
 #include <assert.h>
 
-char* filePath = "/mnt/d/Homework/Advanced-Unix-Programming/HW4/no_more_traps";
-char* txtFile  = "/mnt/d/Homework/Advanced-Unix-Programming/HW4/no_more_traps.txt";
+char* filePath = "/home/ksld154/Advanced-Unix-Programming/HW4/no_more_traps";
+char* txtFile  = "/home/ksld154/Advanced-Unix-Programming/HW4/no_more_traps.txt";
 
 
 void errquit(const char* msg) {
@@ -17,7 +17,12 @@ void errquit(const char* msg) {
 }
 
 unsigned char readTxt_byte(FILE* fp) {
-    if(fp == NULL) {
+    
+    if(feof(fp)) {
+        
+        exit(-1);
+    }
+    else if(fp == NULL) {
         errquit("Read txt file error!");
         return -1;
     }
@@ -33,7 +38,7 @@ unsigned char readTxt_byte(FILE* fp) {
 
 int main () {
 
-    // FILE* fp = fopen(txtFile, "r");
+    FILE* fp = fopen(txtFile, "r");
     // while(!feof(fp)) {
     //     unsigned char byte_code = readTxt_byte(fp);
     //     printf("%u\n", byte_code);
@@ -69,29 +74,48 @@ int main () {
         // PEEKTEXT, POKETEXT...
         // 1. find where 0xcc is
         // 2. replace it with readTxt_byte(fp)
-        while(WIFSTOPPED(wait_status)) {
-            // printf("wait: %d\n", WSTOPSIG(wait_status));
-            
+        int cnt = 0;
+        while(waitpid(child, &wait_status, 0) > 0) {
+
+            if(!WIFSTOPPED(wait_status)) {
+                continue;
+            }
+            printf("signal: %d\n", WEXITSTATUS(wait_status));
+
+
             // 1. find where 0xcc is
             struct user_regs_struct regs;
-            ptrace(PTRACE_GETREGS, child, NULL, &regs);
-            printf("%llX\n", regs.rip);
+            if((ptrace(PTRACE_GETREGS, child, NULL, &regs)) < 0) {
+                errquit("ptrace(get_reg)");
+            }
+            printf("rip: %llX\n", regs.rip-1);
 
+            
             // 2. get original code
-            long original_code =  ptrace(PTRACE_PEEKTEXT, child, regs.rip, NULL);
-            printf("%lX\n", original_code);
+            unsigned char code_byte = readTxt_byte(fp);
+            long original_code = ptrace(PTRACE_PEEKTEXT, child, regs.rip-1, NULL);
+            long modified_code = (original_code & 0xFFFFFFFFFFFFFF00) | code_byte;
 
-
+            
             // 3. replace it with readTxt_byte(fp)
-            // unsigned char code_byte = readTxt_byte(fp);
+            if(ptrace(PTRACE_POKETEXT, child, regs.rip-1, modified_code) < 0) {
+                errquit("poketext");
+            }
+            printf("original code: %lX\n", original_code);
+            printf("replaced with: %lX\n", modified_code);
 
-            if(waitpid(child, &wait_status, 0) < 0) {
-                errquit("waitpid");
+
+            // 4. run the replaced code
+            regs.rip = regs.rip - 1;
+            if(ptrace(PTRACE_SETREGS, child, NULL, &regs) < 0) {
+                errquit("ptrace(set_reg)");
             }
 
+            printf("ind: %d\n\n", cnt++);
+            ptrace(PTRACE_CONT, child, 0, 0);
         }
-        printf("23");
 
+        printf("Finished!\n");
     }
     return 0;
 }
