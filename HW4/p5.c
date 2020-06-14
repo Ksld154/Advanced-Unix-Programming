@@ -74,13 +74,13 @@ int main () {
         // PEEKTEXT, POKETEXT...
         // 1. find where 0xcc is
         // 2. replace it with readTxt_byte(fp)
-        int cnt = 0;
+        // int cnt = 0;
         while(waitpid(child, &wait_status, 0) > 0) {
 
-            if(!WIFSTOPPED(wait_status)) {
+            if(!WIFSTOPPED(wait_status) && WEXITSTATUS(wait_status) != SIGTRAP) {
                 continue;
             }
-            printf("signal: %d\n", WEXITSTATUS(wait_status));
+            // printf("signal: %d\n", WEXITSTATUS(wait_status));
 
 
             // 1. find where 0xcc is
@@ -88,7 +88,7 @@ int main () {
             if((ptrace(PTRACE_GETREGS, child, NULL, &regs)) < 0) {
                 errquit("ptrace(get_reg)");
             }
-            printf("rip: %llX\n", regs.rip-1);
+            // printf("rip: %llX\n", regs.rip-1);
 
             
             // 2. get original code
@@ -101,8 +101,8 @@ int main () {
             if(ptrace(PTRACE_POKETEXT, child, regs.rip-1, modified_code) < 0) {
                 errquit("poketext");
             }
-            printf("original code: %lX\n", original_code);
-            printf("replaced with: %lX\n", modified_code);
+            // printf("original code: %lX\n", original_code);
+            // printf("replaced with: %lX\n", modified_code);
 
 
             // 4. run the replaced code
@@ -111,10 +111,13 @@ int main () {
                 errquit("ptrace(set_reg)");
             }
 
-            printf("ind: %d\n\n", cnt++);
+            // printf("ind: %d\n\n", cnt++);
+            // fflush(stdout);
             ptrace(PTRACE_CONT, child, 0, 0);
         }
 
+        
+        // ptrace(PTRACE_CONT, child, 0, 0);
         printf("Finished!\n");
     }
     return 0;
